@@ -9,8 +9,11 @@
             --bg-color: #f0f2f5;
             --card-bg: #ffffff;
             --red: #e74c3c;
+            --red-light: #ffcdd2; /* 红桃方块高亮背景（加深了对比度） */
             --black: #2c3e50;
-            --border: #ddd;
+            --black-light: #cfd8dc; /* 黑桃梅花高亮背景（加深了对比度） */
+            --border-uncollected: #e0e0e0;
+            --text-uncollected: #b0b0b0;
             --btn-blue: #3498db;
             --btn-green: #2ecc71;
             --btn-red: #e74c3c;
@@ -129,12 +132,13 @@
             width: 100%;
             padding-bottom: 150%;
             position: relative;
-            background-color: #fff;
-            border: 1px solid var(--border);
+            background-color: var(--card-bg);
+            border: 1.5px solid var(--border-uncollected);
             border-radius: 6px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             user-select: none;
+            opacity: 0.7; /* 未收集牌降低不透明度，更显灰暗 */
         }
 
         .card-inner {
@@ -149,22 +153,65 @@
             align-items: center;
             padding: 8px 4px;
             font-weight: bold;
+            color: var(--text-uncollected); /* 未收集文字更淡 */
         }
 
+        /* 点击反馈：缩放+短暂提亮 */
         .card:active {
-            transform: scale(0.95);
+            transform: scale(0.92);
+            filter: brightness(1.1);
         }
 
-        .card[data-suit="hearts"], .card[data-suit="diamonds"] { color: var(--red); }
-        .card[data-suit="spades"], .card[data-suit="clubs"] { color: var(--black); }
-        .card[data-suit="joker"] { color: #555; }
+        /* 花色基础颜色 */
+        .card[data-suit="hearts"], .card[data-suit="diamonds"] { --suit-color: var(--red); }
+        .card[data-suit="spades"], .card[data-suit="clubs"] { --suit-color: var(--black); }
+        .card[data-suit="joker"] { --suit-color: #555; }
 
+        /* ==================== 已收集核心高亮样式 ==================== */
         .card.collected {
-            border: 2px solid currentColor;
-            box-shadow: 0 0 8px rgba(0,0,0,0.1);
+            opacity: 1; /* 已收集牌完全不透明，对比拉满 */
+            border: 3px solid var(--suit-color); /* 加粗边框，更醒目 */
+            box-shadow: 0 0 12px rgba(var(--suit-color), 0.3); /* 柔和的品牌色发光阴影 */
         }
-        .card.collected.hearts, .card.collected.diamonds { background-color: #ffebee; }
-        .card.collected.spades, .card.collected.clubs { background-color: #eceff1; }
+
+        /* 红桃/方块已收集背景 */
+        .card.collected.hearts,
+        .card.collected.diamonds {
+            background-color: var(--red-light);
+        }
+
+        /* 黑桃/梅花已收集背景 */
+        .card.collected.spades,
+        .card.collected.clubs {
+            background-color: var(--black-light);
+        }
+
+        /* 已收集文字颜色恢复饱和 */
+        .card.collected .card-inner {
+            color: var(--suit-color);
+        }
+
+        /* 已收集卡片右下角加✅确认标记 */
+        .card.collected::after {
+            content: '✓';
+            position: absolute;
+            bottom: 4px;
+            right: 4px;
+            font-size: 12px;
+            color: var(--suit-color);
+            opacity: 0.7;
+            font-weight: bold;
+        }
+
+        /* 大小王已收集特殊样式 */
+        .card.collected.joker-card {
+            background-color: #f5f5f5;
+            border-color: #666;
+            box-shadow: 0 0 12px rgba(0,0,0,0.2);
+        }
+        .card.collected.joker-card::after {
+            color: #666;
+        }
 
         .rank-top { align-self: flex-start; font-size: 14px; }
         .suit-symbol { font-size: 18px; margin: auto; }
@@ -211,25 +258,19 @@
     <script>
         // ==================== 配置区 ====================
         const STORAGE_KEY = 'poker_collection_v3';
-        // 54张牌的固定排序（编码解码必须一致）
         const CARD_ORDER = [];
         ['hearts', 'diamonds', 'spades', 'clubs'].forEach(suit => {
             ['A','2','3','4','5','6','7','8','9','10','J','Q','K'].forEach(rank => {
                 CARD_ORDER.push(`${suit}_${rank}`);
             });
         });
-        CARD_ORDER.push('joker_big', 'joker_small'); // 最后两位是大小王
+        CARD_ORDER.push('joker_big', 'joker_small');
 
         // ==================== 存储核心逻辑 ====================
         let collection = {};
 
-        /**
-         * 将收集状态编码为14位hex字符串（54bit → 14字符）
-         */
         function encodeProgress(obj) {
-            // 按固定顺序转成54位二进制字符串
             const bits = CARD_ORDER.map(id => obj[id] ? '1' : '0').join('');
-            // 每4位转1个hex字符，不足补0
             let hex = '';
             for (let i = 0; i < bits.length; i += 4) {
                 hex += parseInt(bits.slice(i, i+4).padEnd(4, '0'), 2).toString(16);
@@ -237,16 +278,12 @@
             return hex;
         }
 
-        /**
-         * 将14位hex字符串解码为收集状态对象
-         */
         function decodeProgress(hexStr) {
-            // hex转二进制，补足54位
             let bits = '';
             for (const ch of hexStr) {
                 bits += parseInt(ch, 16).toString(2).padStart(4, '0');
             }
-            bits = bits.slice(0, 54); // 截断到54位，避免补位干扰
+            bits = bits.slice(0, 54);
             
             const obj = {};
             CARD_ORDER.forEach((id, i) => {
@@ -255,9 +292,6 @@
             return obj;
         }
 
-        /**
-         * Cookie读写工具
-         */
         function setCookie(value, days = 365) {
             const date = new Date();
             date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000);
@@ -269,60 +303,40 @@
             return match ? match[2] : null;
         }
 
-        /**
-         * 保存进度：同时写localStorage、Cookie、URL哈希
-         */
         function saveData() {
             const encoded = encodeProgress(collection);
-            // 写localStorage
             localStorage.setItem(STORAGE_KEY, JSON.stringify(collection));
-            // 写Cookie兜底
             setCookie(encoded);
-            // 更新URL哈希（不刷新页面）
             history.replaceState(null, '', `#${encoded}`);
             updateProgress();
         }
 
-        /**
-         * 加载进度：优先级 URL哈希 > localStorage > Cookie
-         */
         function loadData() {
-            // 1. 优先读URL哈希（跨设备/跨浏览器同步）
             const hash = location.hash.slice(1);
             if (hash && /^[0-9a-f]{14}$/i.test(hash)) {
                 try {
                     collection = decodeProgress(hash);
-                    // 同步回localStorage，方便离线使用
                     localStorage.setItem(STORAGE_KEY, JSON.stringify(collection));
                     return;
-                } catch (e) {
-                    console.warn('URL哈希解析失败，尝试其他存储');
-                }
+                } catch (e) {}
             }
 
-            // 2. 读localStorage
             const localData = localStorage.getItem(STORAGE_KEY);
             if (localData) {
                 try {
                     collection = JSON.parse(localData);
                     return;
-                } catch (e) {
-                    console.warn('localStorage数据损坏，尝试Cookie');
-                }
+                } catch (e) {}
             }
 
-            // 3. 读Cookie兜底
             const cookieData = getCookie();
             if (cookieData && /^[0-9a-f]{14}$/i.test(cookieData)) {
                 try {
                     collection = decodeProgress(cookieData);
                     return;
-                } catch (e) {
-                    console.warn('Cookie数据损坏，初始化空状态');
-                }
+                } catch (e) {}
             }
 
-            // 4. 全部失败，初始化空状态
             collection = {};
         }
 
@@ -401,7 +415,6 @@
             const container = document.getElementById('suits-container');
             container.innerHTML = '';
 
-            // 渲染四种花色
             suits.forEach(suit => {
                 const section = document.createElement('div');
                 section.className = 'suit-section';
@@ -418,7 +431,6 @@
                 container.appendChild(section);
             });
 
-            // 渲染大小王
             const jokerSection = document.createElement('div');
             jokerSection.className = 'suit-section';
             
@@ -439,12 +451,10 @@
 
         // ==================== 按钮事件处理 ====================
         function handleExport() {
-            // 微信内无法直接下载，优先提示用URL同步
             if (/MicroMessenger/i.test(navigator.userAgent)) {
                 alert('微信内无法直接下载文件~\n✅ 进度已自动同步到当前链接\n复制当前链接即可在其他设备恢复进度');
                 return;
             }
-            // 非微信环境正常导出JSON
             const dataStr = JSON.stringify(collection, null, 2);
             const blob = new Blob([dataStr], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -466,14 +476,13 @@
             reader.onload = (e) => {
                 try {
                     const importedData = JSON.parse(e.target.result);
-                    // 简单校验数据格式
                     if (typeof importedData !== 'object' || Object.keys(importedData).length > 54) {
                         throw new Error('格式错误');
                     }
                     if (confirm(`导入将覆盖当前进度，确定继续吗？`)) {
                         collection = importedData;
                         saveData();
-                        init(); // 重新渲染所有卡牌
+                        init();
                         alert('导入成功！进度已恢复~');
                     }
                 } catch (err) {
@@ -481,17 +490,14 @@
                 }
             };
             reader.readAsText(file);
-            event.target.value = ''; // 允许重复导入同一文件
+            event.target.value = '';
         }
 
         function handleReset() {
             if (confirm('确定要清空所有收集记录吗？此操作不可撤销！\n（链接中的进度也会同步清空）')) {
                 collection = {};
-                // 清localStorage
                 localStorage.removeItem(STORAGE_KEY);
-                // 清Cookie
                 setCookie('', -1);
-                // 清URL哈希
                 history.replaceState(null, '', location.pathname);
                 init();
                 alert('进度已清空~');
@@ -499,8 +505,8 @@
         }
 
         // ==================== 初始化 ====================
-        loadData(); // 先加载进度
-        init();     // 再渲染页面
+        loadData();
+        init();
     </script>
 </body>
 </html>
