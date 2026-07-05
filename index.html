@@ -2,7 +2,6 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <!-- 适配全面屏+禁止缩放 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>扑克牌收集册</title>
     <style>
@@ -15,18 +14,17 @@
             --btn-blue: #3498db;
             --btn-green: #2ecc71;
             --btn-red: #e74c3c;
+            --tip-color: #888;
         }
 
-        /* 核心：恢复原生滚动，适配安全区 */
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             background-color: var(--bg-color);
             margin: 0;
-            /* 上下留边，底部适配手机手势条 */
             padding: 15px;
             padding-bottom: calc(15px + env(safe-area-inset-bottom));
             color: #333;
-            -webkit-overflow-scrolling: touch; /* iOS平滑滚动 */
+            -webkit-overflow-scrolling: touch;
         }
 
         .container {
@@ -49,6 +47,10 @@
             gap: 10px;
         }
 
+        .title-icon {
+            font-size: 28px;
+        }
+
         .progress-bar {
             background: #fff;
             border-radius: 20px;
@@ -62,6 +64,13 @@
             font-weight: bold;
             font-size: 20px;
             color: var(--red);
+        }
+
+        .sync-tip {
+            font-size: 12px;
+            color: var(--tip-color);
+            margin-top: 8px;
+            line-height: 1.4;
         }
 
         .controls {
@@ -79,6 +88,7 @@
             cursor: pointer;
             font-weight: 500;
             color: #fff;
+            transition: opacity 0.2s;
         }
 
         button:active {
@@ -111,16 +121,14 @@
 
         .cards-grid {
             display: grid;
-            /* 每行5张，自动适配屏幕宽度 */
             grid-template-columns: repeat(5, 1fr);
             gap: 8px;
         }
 
-        /* 核心：兼容所有浏览器的卡片高度实现（不用aspect-ratio） */
         .card {
             width: 100%;
-            padding-bottom: 150%; /* 宽:高=2:3，标准扑克牌比例 */
-            position: relative; /* 内部内容绝对定位 */
+            padding-bottom: 150%;
+            position: relative;
             background-color: #fff;
             border: 1px solid var(--border);
             border-radius: 6px;
@@ -129,7 +137,6 @@
             user-select: none;
         }
 
-        /* 卡片内部容器，撑满整个卡片 */
         .card-inner {
             position: absolute;
             top: 0;
@@ -148,12 +155,10 @@
             transform: scale(0.95);
         }
 
-        /* 花色颜色 */
         .card[data-suit="hearts"], .card[data-suit="diamonds"] { color: var(--red); }
         .card[data-suit="spades"], .card[data-suit="clubs"] { color: var(--black); }
         .card[data-suit="joker"] { color: #555; }
 
-        /* 收集状态样式 */
         .card.collected {
             border: 2px solid currentColor;
             box-shadow: 0 0 8px rgba(0,0,0,0.1);
@@ -165,17 +170,13 @@
         .suit-symbol { font-size: 18px; margin: auto; }
         .rank-bottom { align-self: flex-end; font-size: 14px; transform: rotate(180deg); }
 
-        /* JQK字号缩小 */
         .card.jqk .rank-top, .card.jqk .rank-bottom { font-size: 12px; }
         .card.jqk .suit-symbol { font-size: 16px; }
-
-        /* 大小王特殊样式 */
         .card.joker-card .suit-symbol { font-size: 28px; }
         .card.joker-card .rank-top, .card.joker-card .rank-bottom { font-size: 12px; }
 
         #fileInput { display: none; }
 
-        /* 超小屏手机适配 */
         @media (max-width: 360px) {
             .rank-top, .rank-bottom { font-size: 12px; }
             .suit-symbol { font-size: 16px; }
@@ -187,24 +188,145 @@
     <div class="container">
         <header>
             <div class="title">
-                <span>🃏</span> 扑克牌收集册
+                <span class="title-icon">🃏</span> 扑克牌收集册
             </div>
             <div class="progress-bar">
                 已收集 <span class="progress-num" id="progress">0</span> / 54
             </div>
+            <div class="sync-tip">
+                💡 进度已自动同步到链接<br>复制当前链接即可跨设备/跨浏览器恢复进度
+            </div>
         </header>
 
         <div class="controls">
-            <button class="btn-export" onclick="exportData()">导出进度</button>
+            <button class="btn-export" onclick="handleExport()">导出进度</button>
             <button class="btn-import" onclick="document.getElementById('fileInput').click()">导入进度</button>
-            <button class="btn-reset" onclick="resetData()">重置进度</button>
+            <button class="btn-reset" onclick="handleReset()">重置进度</button>
         </div>
 
         <div id="suits-container"></div>
-        <input type="file" id="fileInput" accept=".json" onchange="importData(event)">
+        <input type="file" id="fileInput" accept=".json" onchange="handleImport(event)">
     </div>
 
     <script>
+        // ==================== 配置区 ====================
+        const STORAGE_KEY = 'poker_collection_v3';
+        // 54张牌的固定排序（编码解码必须一致）
+        const CARD_ORDER = [];
+        ['hearts', 'diamonds', 'spades', 'clubs'].forEach(suit => {
+            ['A','2','3','4','5','6','7','8','9','10','J','Q','K'].forEach(rank => {
+                CARD_ORDER.push(`${suit}_${rank}`);
+            });
+        });
+        CARD_ORDER.push('joker_big', 'joker_small'); // 最后两位是大小王
+
+        // ==================== 存储核心逻辑 ====================
+        let collection = {};
+
+        /**
+         * 将收集状态编码为14位hex字符串（54bit → 14字符）
+         */
+        function encodeProgress(obj) {
+            // 按固定顺序转成54位二进制字符串
+            const bits = CARD_ORDER.map(id => obj[id] ? '1' : '0').join('');
+            // 每4位转1个hex字符，不足补0
+            let hex = '';
+            for (let i = 0; i < bits.length; i += 4) {
+                hex += parseInt(bits.slice(i, i+4).padEnd(4, '0'), 2).toString(16);
+            }
+            return hex;
+        }
+
+        /**
+         * 将14位hex字符串解码为收集状态对象
+         */
+        function decodeProgress(hexStr) {
+            // hex转二进制，补足54位
+            let bits = '';
+            for (const ch of hexStr) {
+                bits += parseInt(ch, 16).toString(2).padStart(4, '0');
+            }
+            bits = bits.slice(0, 54); // 截断到54位，避免补位干扰
+            
+            const obj = {};
+            CARD_ORDER.forEach((id, i) => {
+                if (bits[i] === '1') obj[id] = true;
+            });
+            return obj;
+        }
+
+        /**
+         * Cookie读写工具
+         */
+        function setCookie(value, days = 365) {
+            const date = new Date();
+            date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000);
+            document.cookie = `${STORAGE_KEY}=${value};expires=${date.toUTCString()};path=/;SameSite=Lax`;
+        }
+
+        function getCookie() {
+            const match = document.cookie.match(new RegExp(`(^| )${STORAGE_KEY}=([^;]+)`));
+            return match ? match[2] : null;
+        }
+
+        /**
+         * 保存进度：同时写localStorage、Cookie、URL哈希
+         */
+        function saveData() {
+            const encoded = encodeProgress(collection);
+            // 写localStorage
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(collection));
+            // 写Cookie兜底
+            setCookie(encoded);
+            // 更新URL哈希（不刷新页面）
+            history.replaceState(null, '', `#${encoded}`);
+            updateProgress();
+        }
+
+        /**
+         * 加载进度：优先级 URL哈希 > localStorage > Cookie
+         */
+        function loadData() {
+            // 1. 优先读URL哈希（跨设备/跨浏览器同步）
+            const hash = location.hash.slice(1);
+            if (hash && /^[0-9a-f]{14}$/i.test(hash)) {
+                try {
+                    collection = decodeProgress(hash);
+                    // 同步回localStorage，方便离线使用
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(collection));
+                    return;
+                } catch (e) {
+                    console.warn('URL哈希解析失败，尝试其他存储');
+                }
+            }
+
+            // 2. 读localStorage
+            const localData = localStorage.getItem(STORAGE_KEY);
+            if (localData) {
+                try {
+                    collection = JSON.parse(localData);
+                    return;
+                } catch (e) {
+                    console.warn('localStorage数据损坏，尝试Cookie');
+                }
+            }
+
+            // 3. 读Cookie兜底
+            const cookieData = getCookie();
+            if (cookieData && /^[0-9a-f]{14}$/i.test(cookieData)) {
+                try {
+                    collection = decodeProgress(cookieData);
+                    return;
+                } catch (e) {
+                    console.warn('Cookie数据损坏，初始化空状态');
+                }
+            }
+
+            // 4. 全部失败，初始化空状态
+            collection = {};
+        }
+
+        // ==================== UI渲染逻辑 ====================
         const suits = [
             { id: 'hearts', name: '红心', symbol: '♥' },
             { id: 'diamonds', name: '方块', symbol: '♦' },
@@ -217,10 +339,64 @@
             { id: 'small', name: '小王', symbol: '🃏' }
         ];
 
-        // 读取本地存储，键名换了避免和旧版本冲突
-        let collection = JSON.parse(localStorage.getItem('poker_collection_v3')) || {};
+        function updateProgress() {
+            document.getElementById('progress').textContent = Object.keys(collection).length;
+        }
 
-        // 初始化渲染
+        function createCard(suit, rank) {
+            const id = `${suit.id}_${rank}`;
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.dataset.id = id;
+            card.dataset.suit = suit.id;
+            
+            if (['J', 'Q', 'K'].includes(rank)) card.classList.add('jqk');
+            if (collection[id]) card.classList.add('collected', suit.id);
+
+            card.innerHTML = `
+                <div class="card-inner">
+                    <div class="rank-top">${rank}</div>
+                    <div class="suit-symbol">${suit.symbol}</div>
+                    <div class="rank-bottom">${rank}</div>
+                </div>
+            `;
+
+            card.addEventListener('click', () => toggleCard(card, id, suit.id));
+            return card;
+        }
+
+        function createJoker(joker) {
+            const id = `joker_${joker.id}`;
+            const card = document.createElement('div');
+            card.className = 'card joker-card';
+            card.dataset.id = id;
+            card.dataset.suit = 'joker';
+
+            if (collection[id]) card.classList.add('collected');
+
+            card.innerHTML = `
+                <div class="card-inner">
+                    <div class="rank-top">${joker.name}</div>
+                    <div class="suit-symbol">${joker.symbol}</div>
+                    <div class="rank-bottom">${joker.name}</div>
+                </div>
+            `;
+
+            card.addEventListener('click', () => toggleCard(card, id, 'joker'));
+            return card;
+        }
+
+        function toggleCard(cardEl, id, suit) {
+            if (collection[id]) {
+                delete collection[id];
+                cardEl.classList.remove('collected', suit);
+            } else {
+                collection[id] = true;
+                cardEl.classList.add('collected', suit);
+            }
+            saveData();
+        }
+
         function init() {
             const container = document.getElementById('suits-container');
             container.innerHTML = '';
@@ -237,11 +413,7 @@
 
                 const grid = document.createElement('div');
                 grid.className = 'cards-grid';
-
-                ranks.forEach(rank => {
-                    grid.appendChild(createCard(suit, rank));
-                });
-
+                ranks.forEach(rank => grid.appendChild(createCard(suit, rank)));
                 section.appendChild(grid);
                 container.appendChild(section);
             });
@@ -258,97 +430,21 @@
 
             const jGrid = document.createElement('div');
             jGrid.className = 'cards-grid';
-
-            jokers.forEach(joker => {
-                jGrid.appendChild(createJoker(joker));
-            });
-
+            jokers.forEach(joker => jGrid.appendChild(createJoker(joker)));
             jokerSection.appendChild(jGrid);
             container.appendChild(jokerSection);
 
             updateProgress();
         }
 
-        // 创建普通卡牌
-        function createCard(suit, rank) {
-            const id = `${suit.id}_${rank}`;
-            const card = document.createElement('div');
-            card.className = 'card';
-            card.dataset.id = id;
-            card.dataset.suit = suit.id;
-            
-            // JQK标记
-            if (['J', 'Q', 'K'].includes(rank)) {
-                card.classList.add('jqk');
+        // ==================== 按钮事件处理 ====================
+        function handleExport() {
+            // 微信内无法直接下载，优先提示用URL同步
+            if (/MicroMessenger/i.test(navigator.userAgent)) {
+                alert('微信内无法直接下载文件~\n✅ 进度已自动同步到当前链接\n复制当前链接即可在其他设备恢复进度');
+                return;
             }
-
-            // 已收集状态
-            if (collection[id]) {
-                card.classList.add('collected', suit.id);
-            }
-
-            // 内部内容
-            card.innerHTML = `
-                <div class="card-inner">
-                    <div class="rank-top">${rank}</div>
-                    <div class="suit-symbol">${suit.symbol}</div>
-                    <div class="rank-bottom">${rank}</div>
-                </div>
-            `;
-
-            card.addEventListener('click', () => toggleCard(card, id, suit.id));
-            return card;
-        }
-
-        // 创建大小王
-        function createJoker(joker) {
-            const id = `joker_${joker.id}`;
-            const card = document.createElement('div');
-            card.className = 'card joker-card';
-            card.dataset.id = id;
-            card.dataset.suit = 'joker';
-
-            if (collection[id]) {
-                card.classList.add('collected');
-            }
-
-            card.innerHTML = `
-                <div class="card-inner">
-                    <div class="rank-top">${joker.name}</div>
-                    <div class="suit-symbol">${joker.symbol}</div>
-                    <div class="rank-bottom">${joker.name}</div>
-                </div>
-            `;
-
-            card.addEventListener('click', () => toggleCard(card, id, 'joker'));
-            return card;
-        }
-
-        // 切换收集状态
-        function toggleCard(cardEl, id, suit) {
-            if (collection[id]) {
-                delete collection[id];
-                cardEl.classList.remove('collected', suit);
-            } else {
-                collection[id] = true;
-                cardEl.classList.add('collected', suit);
-            }
-            saveData();
-            updateProgress();
-        }
-
-        // 保存数据
-        function saveData() {
-            localStorage.setItem('poker_collection_v3', JSON.stringify(collection));
-        }
-
-        // 更新进度
-        function updateProgress() {
-            document.getElementById('progress').innerText = Object.keys(collection).length;
-        }
-
-        // 导出进度
-        function exportData() {
+            // 非微信环境正常导出JSON
             const dataStr = JSON.stringify(collection, null, 2);
             const blob = new Blob([dataStr], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -359,11 +455,10 @@
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            alert('进度已导出！请妥善保存这个JSON文件~');
+            alert('进度已导出！可作为额外备份保存~');
         }
 
-        // 导入进度
-        function importData(event) {
+        function handleImport(event) {
             const file = event.target.files[0];
             if (!file) return;
             
@@ -371,7 +466,11 @@
             reader.onload = (e) => {
                 try {
                     const importedData = JSON.parse(e.target.result);
-                    if (confirm(`导入将覆盖当前进度，确定要继续吗？`)) {
+                    // 简单校验数据格式
+                    if (typeof importedData !== 'object' || Object.keys(importedData).length > 54) {
+                        throw new Error('格式错误');
+                    }
+                    if (confirm(`导入将覆盖当前进度，确定继续吗？`)) {
                         collection = importedData;
                         saveData();
                         init(); // 重新渲染所有卡牌
@@ -382,21 +481,26 @@
                 }
             };
             reader.readAsText(file);
-            event.target.value = ''; // 重置input，允许重复导入同一文件
+            event.target.value = ''; // 允许重复导入同一文件
         }
 
-        // 重置进度
-        function resetData() {
-            if (confirm('确定要清空所有收集记录吗？此操作不可撤销！')) {
+        function handleReset() {
+            if (confirm('确定要清空所有收集记录吗？此操作不可撤销！\n（链接中的进度也会同步清空）')) {
                 collection = {};
-                saveData();
+                // 清localStorage
+                localStorage.removeItem(STORAGE_KEY);
+                // 清Cookie
+                setCookie('', -1);
+                // 清URL哈希
+                history.replaceState(null, '', location.pathname);
                 init();
                 alert('进度已清空~');
             }
         }
 
-        // 页面加载完成后初始化
-        window.onload = init;
+        // ==================== 初始化 ====================
+        loadData(); // 先加载进度
+        init();     // 再渲染页面
     </script>
 </body>
 </html>
